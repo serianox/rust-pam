@@ -29,7 +29,7 @@ struct PamResponse {
 #[repr(C)]
 pub struct PamConv {
     conv: extern "C" fn(num_msg: c_int,
-                        pam_message: &&PamMessage,
+                        pam_message: & *const PamMessage,
                         pam_response: &mut *const PamResponse,
                         appdata_ptr: *const AppDataPtr)
                         -> PamResultCode,
@@ -53,20 +53,27 @@ impl PamConv {
     /// these message styles - and not all applications implement all message
     /// styles.
     pub fn send(&self, style: PamMessageStyle, msg: &str) -> PamResult<Option<String>> {
-        let mut resp_ptr: *const PamResponse = ptr::null();
-        let msg = PamMessage {
+        let msg_c = CString::new(msg).unwrap();
+        let msg_ptr: *const PamMessage = &PamMessage {
             msg_style: style,
-            msg: CString::new(msg).unwrap().as_ptr(),
+            msg: msg_c.as_ptr(),
         };
+        let mut resp_ptr: *const PamResponse = ptr::null();
 
-        let ret = (self.conv)(1, &&msg, &mut resp_ptr, self.appdata_ptr);
+        let ret = (self.conv)(1, &msg_ptr, &mut resp_ptr, self.appdata_ptr);
 
         if constants::PAM_SUCCESS == ret {
             if resp_ptr.is_null() {
                 Ok(None)
             } else {
-                let bytes = unsafe { CStr::from_ptr((*resp_ptr).resp).to_bytes() };
-                Ok(String::from_utf8(bytes.to_vec()).ok())
+                let resp_c = unsafe { (*resp_ptr).resp };
+                if resp_c.is_null() {
+                    Ok(None)
+                }
+                else {
+                    let bytes = unsafe { CStr::from_ptr(resp_c).to_bytes() };
+                    Ok(String::from_utf8(bytes.to_vec()).ok())
+                }
             }
         } else {
             Err(ret)
